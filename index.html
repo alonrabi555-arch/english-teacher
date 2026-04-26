@@ -1030,12 +1030,12 @@
       const result     = event.results[0][0];
       const transcript = result.transcript;
       const confidence = result.confidence;
-      document.getElementById('chat-input').value = transcript;
       stopListening();
       showPronFeedback(confidence);
-      // Auto-send only if understood clearly; otherwise let user retry or edit
+      // Voice answers go straight to the bot for English-correction feedback.
+      // Low-confidence transcripts are dropped so the user can retry.
       if (confidence >= 0.60) {
-        setTimeout(() => sendMessage(), 1100);
+        sendVoiceMessage(transcript, confidence);
       }
     };
 
@@ -1224,20 +1224,35 @@
     const input = document.getElementById('chat-input');
     const text  = input.value.trim();
     if (!text) return;
-
-    addUserMessage(text);
     input.value = '';
-    document.getElementById('send-btn').disabled = true;
+    await sendToBot(text, { voice: false });
+    input.focus();
+  }
 
+  async function sendVoiceMessage(transcript, confidence) {
+    await sendToBot(transcript, { voice: true, confidence });
+  }
+
+  async function sendToBot(text, opts) {
+    const isVoice = !!(opts && opts.voice);
+    addUserMessage((isVoice ? '🎤 ' : '') + text);
     chatHistory.push({ role: 'user', content: text });
+
+    document.getElementById('send-btn').disabled = true;
+    document.getElementById('mic-btn').disabled  = true;
 
     const typingEl = addTypingIndicator();
 
     try {
+      const payload = { message: text, history: chatHistory, articleContent };
+      if (isVoice) {
+        payload.voice      = true;
+        payload.confidence = opts.confidence;
+      }
       const res = await fetch(ENDPOINTS.quiz, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, history: chatHistory, articleContent })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       typingEl.remove();
@@ -1250,7 +1265,7 @@
     }
 
     document.getElementById('send-btn').disabled = false;
-    input.focus();
+    document.getElementById('mic-btn').disabled  = false;
   }
 
   function addBotMessage(text) {
