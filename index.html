@@ -452,6 +452,114 @@
     .vocab-card .vc-result.ok { color: #2a7f4f; }
     .vocab-card .vc-result.fail { color: #c0392b; }
 
+    /* ── Voice controls ── */
+    .voice-toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: #aaa;
+      font-size: 0.78rem;
+      font-family: sans-serif;
+      cursor: pointer;
+      margin-left: auto;
+      user-select: none;
+    }
+    .voice-toggle-row label { cursor: pointer; }
+    #voice-toggle { cursor: pointer; accent-color: #4caf50; }
+
+    #mic-btn {
+      background: #f0f4ff;
+      color: #2261c4;
+      border: 1px solid #c8d8f8;
+      border-radius: 8px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 1.15rem;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+    #mic-btn:hover { background: #e0ecff; }
+    #mic-btn.recording {
+      background: #ffebee;
+      color: #e53935;
+      border-color: #ffcdd2;
+      animation: mic-pulse 1.2s ease-in-out infinite;
+    }
+    #mic-btn:disabled { opacity: 0.35; cursor: default; animation: none; }
+    @keyframes mic-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(229,57,53,0.35); }
+      50%       { box-shadow: 0 0 0 9px rgba(229,57,53,0); }
+    }
+
+    #voice-status {
+      font-family: sans-serif;
+      font-size: 0.8rem;
+      color: #e53935;
+      padding: 0 16px 8px;
+      display: none;
+      font-style: italic;
+    }
+    #voice-status.active { display: block; }
+
+    /* ── Pronunciation feedback (quiz) ── */
+    .pron-feedback {
+      font-family: sans-serif;
+      font-size: 0.85rem;
+      padding: 7px 16px;
+      border-radius: 6px;
+      margin: 0 16px 8px;
+      display: none;
+      font-weight: 500;
+    }
+    .pron-great { background: #e8f5e9; color: #2e7d32; }
+    .pron-good  { background: #fff3cd; color: #856404; }
+    .pron-retry { background: #ffebee; color: #c62828; }
+
+    /* ── Reading mode ── */
+    .btn-read-mode {
+      display: none;
+      background: #f0f4ff;
+      color: #2261c4;
+      border: 1px solid #c8d8f8;
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-size: 0.85rem;
+      font-family: sans-serif;
+      cursor: pointer;
+      transition: all 0.15s;
+      margin-bottom: 20px;
+    }
+    .btn-read-mode.visible { display: inline-block; }
+    .btn-read-mode.active  { background: #2261c4; color: #fff; border-color: #2261c4; }
+
+    .para-mic-row {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .reading-mode .para-mic-row { display: flex; }
+
+    .para-mic-btn {
+      background: none;
+      border: 1px solid #c8d8f8;
+      color: #2261c4;
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 0.8rem;
+      font-family: sans-serif;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .para-mic-btn:hover { background: #e0ecff; }
+    .para-mic-btn.recording { background: #ffebee; color: #e53935; border-color: #ffcdd2; animation: mic-pulse 1.2s ease-in-out infinite; }
+
+    .read-score-inline { font-family: sans-serif; font-size: 0.78rem; color: #666; font-style: italic; }
+
+    .word.read-correct { background: #c8e6c9 !important; color: #1b5e20 !important; }
+    .word.read-wrong   { background: #ffcdd2 !important; color: #b71c1c !important; }
+
     @media (max-width: 600px) {
       #article-card { padding: 24px 20px; }
       #article-title { font-size: 1.4rem; }
@@ -494,6 +602,7 @@
       <div class="article-meta" id="article-meta"></div>
       <h2 id="article-title"></h2>
       <p class="article-summary" id="article-summary"></p>
+      <button class="btn-read-mode" id="btn-read-mode" onclick="toggleReadingMode()" title="תרגל קריאה בקול — מיקרופון ליד כל פסקה">🗣 מצב קריאה בקול</button>
       <div id="article-body"></div>
       <div class="article-source" id="article-source"></div>
     </div>
@@ -502,6 +611,10 @@
       <div class="quiz-header">
         <span class="dot"></span>
         Quiz Bot — Test Your Understanding
+        <label class="voice-toggle-row" title="הפעל/כבה קול">
+          <input type="checkbox" id="voice-toggle" onchange="toggleVoiceMode()" checked />
+          🔊 קול
+        </label>
       </div>
       <div id="quiz-start-area">
         <p>Done reading? Let's see how much you understood!<br>
@@ -510,8 +623,11 @@
       </div>
       <div id="chat-area">
         <div id="messages"></div>
+        <div id="voice-status">🎤 מקשיב...</div>
+        <div id="pron-feedback" class="pron-feedback"></div>
         <div id="chat-input-row">
-          <input id="chat-input" type="text" placeholder="Type your answer..." autocomplete="off" />
+          <input id="chat-input" type="text" placeholder="Type or speak your answer..." autocomplete="off" />
+          <button id="mic-btn" onclick="toggleMic()" title="דבר את התשובה">🎤</button>
           <button id="send-btn" onclick="sendMessage()">Send</button>
         </div>
       </div>
@@ -747,6 +863,7 @@
       }
 
       renderArticle(data.content);
+      document.getElementById('btn-read-mode').classList.add('visible');
 
     } catch (e) {
       console.error(e);
@@ -764,6 +881,7 @@
     paragraphs.forEach(para => {
       if (!para.trim()) return;
       const p = document.createElement('p');
+      p.dataset.text = para.trim();
       const tokens = para.split(/(\s+|[,\.!?;:"'()\[\]—–-])/);
       tokens.forEach(token => {
         if (/^[a-zA-Z]{2,}$/.test(token)) {
@@ -858,6 +976,241 @@
     hideTimer = setTimeout(() => tooltip.classList.remove('visible'), 300);
   });
 
+  // ── Voice (TTS + STT) ─────────────────────────────────────────
+  const synth = window.speechSynthesis;
+  const STT_SUPPORTED = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  let voiceMode   = true;
+  let recognition = null;
+  let isRecording = false;
+
+  // Always show mic btn — check support at click time for better error messages
+
+  function toggleVoiceMode() {
+    voiceMode = document.getElementById('voice-toggle').checked;
+    if (!voiceMode) synth.cancel();
+  }
+
+  function speakText(text) {
+    if (!voiceMode || !text) return;
+    synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang  = 'en-US';
+    utterance.rate  = 0.88;
+    utterance.pitch = 1;
+    synth.speak(utterance);
+  }
+
+  function toggleMic() {
+    if (isRecording) { stopListening(); }
+    else             { startListening(); }
+  }
+
+  function startListening() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert('הדפדפן שלך לא תומך במיקרופון.\nנסה Safari או Chrome.'); return; }
+    synth.cancel(); // stop TTS before recording
+
+    recognition = new SR();
+    recognition.lang            = 'en-US';
+    recognition.interimResults  = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous      = false;
+
+    recognition.onstart = () => {
+      isRecording = true;
+      const btn = document.getElementById('mic-btn');
+      btn.classList.add('recording');
+      btn.textContent = '⏹';
+      btn.title = 'עצור הקלטה';
+      document.getElementById('voice-status').classList.add('active');
+      document.getElementById('chat-input').placeholder = 'מקשיב לך...';
+    };
+
+    recognition.onresult = (event) => {
+      const result     = event.results[0][0];
+      const transcript = result.transcript;
+      const confidence = result.confidence;
+      document.getElementById('chat-input').value = transcript;
+      stopListening();
+      showPronFeedback(confidence);
+      // Auto-send only if understood clearly; otherwise let user retry or edit
+      if (confidence >= 0.60) {
+        setTimeout(() => sendMessage(), 1100);
+      }
+    };
+
+    recognition.onerror = (event) => {
+      console.warn('Speech error:', event.error);
+      stopListening();
+      if (event.error === 'not-allowed') {
+        alert('נא לאפשר גישה למיקרופון בדפדפן.');
+      }
+    };
+
+    recognition.onend = () => { stopListening(); };
+
+    recognition.start();
+  }
+
+  function stopListening() {
+    isRecording = false;
+    if (recognition) {
+      try { recognition.stop(); } catch(e) {}
+      recognition = null;
+    }
+    const btn = document.getElementById('mic-btn');
+    btn.classList.remove('recording');
+    btn.textContent = '🎤';
+    btn.title = 'דבר את התשובה';
+    document.getElementById('voice-status').classList.remove('active');
+    document.getElementById('chat-input').placeholder = 'Type or speak your answer...';
+  }
+
+  function showPronFeedback(confidence) {
+    const el = document.getElementById('pron-feedback');
+    if (!el) return;
+    let text, cls;
+    if (confidence >= 0.88) {
+      text = '🎯 הגייה מצוינת!';  cls = 'pron-feedback pron-great';
+    } else if (confidence >= 0.60) {
+      text = '👍 הגייה טובה';      cls = 'pron-feedback pron-good';
+    } else {
+      text = '⚠️ לא הצלחתי להבין — נסה שוב לאט יותר';  cls = 'pron-feedback pron-retry';
+    }
+    el.textContent = text;
+    el.className   = cls;
+    el.style.display = 'block';
+    if (confidence >= 0.60) {
+      setTimeout(() => { el.style.display = 'none'; }, 2500);
+    }
+  }
+
+  // ── Reading mode ──────────────────────────────────────────────
+  let readingMode = false;
+
+  function toggleReadingMode() {
+    readingMode = !readingMode;
+    const bodyEl = document.getElementById('article-body');
+    const btn    = document.getElementById('btn-read-mode');
+
+    if (readingMode) {
+      bodyEl.classList.add('reading-mode');
+      btn.classList.add('active');
+      btn.textContent = '✕ סגור מצב קריאה';
+      // Insert mic row before each paragraph
+      Array.from(bodyEl.querySelectorAll('p')).forEach((p, i) => {
+        const row = document.createElement('div');
+        row.className = 'para-mic-row';
+        row.dataset.pidx = i;
+        row.innerHTML = `<button class="para-mic-btn" id="pmb-${i}">🎤 קרא בקול</button><span class="read-score-inline" id="pms-${i}"></span>`;
+        row.querySelector('.para-mic-btn').addEventListener('click', () => startParaRead(p, i));
+        p.insertAdjacentElement('beforebegin', row);
+      });
+    } else {
+      bodyEl.classList.remove('reading-mode');
+      btn.classList.remove('active');
+      btn.textContent = '🗣 מצב קריאה בקול';
+      bodyEl.querySelectorAll('.para-mic-row').forEach(r => r.remove());
+      bodyEl.querySelectorAll('.word').forEach(w => w.classList.remove('read-correct', 'read-wrong'));
+    }
+  }
+
+  function startParaRead(para, idx) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { alert('הדפדפן שלך לא תומך במיקרופון.\nנסה Safari.'); return; }
+
+    const btn = document.getElementById('pmb-' + idx);
+
+    // User pressed "סיימתי" — stop and show score
+    if (btn._active) {
+      btn._active = false;
+      if (btn._rec) { try { btn._rec.stop(); } catch(e) {} }
+      return;
+    }
+
+    synth.cancel();
+    document.getElementById('pms-' + idx).textContent = '';
+    btn._active = true;
+    btn._rec    = null;
+    btn.classList.add('recording');
+    btn.textContent = '⏹ סיימתי';
+
+    let finalTranscript = '';
+
+    // iOS Safari doesn't support continuous:true — we restart after each phrase
+    function launchRec() {
+      if (!btn._active) { showParaScore(); return; }
+      const rec = new SR();
+      rec.lang           = 'en-US';
+      rec.continuous     = false;
+      rec.interimResults = false;
+      btn._rec = rec;
+
+      rec.onresult = (event) => {
+        if (event.results[0] && event.results[0].isFinal) {
+          finalTranscript += event.results[0][0].transcript + ' ';
+        }
+      };
+
+      rec.onend = () => {
+        btn._rec = null;
+        if (btn._active) {
+          // Auto-restart so user can keep reading
+          setTimeout(launchRec, 150);
+        } else {
+          showParaScore();
+        }
+      };
+
+      rec.onerror = (e) => {
+        btn._rec = null;
+        if (e.error === 'no-speech' && btn._active) {
+          setTimeout(launchRec, 150); // restart silently on no-speech
+        } else if (e.error !== 'aborted') {
+          btn._active = false;
+          btn.classList.remove('recording');
+          btn.textContent = '🎤 קרא בקול';
+          console.warn('Para read error:', e.error);
+        }
+      };
+
+      try { rec.start(); } catch(e) { btn._active = false; btn.classList.remove('recording'); btn.textContent = '🎤 קרא בקול'; }
+    }
+
+    function showParaScore() {
+      btn.classList.remove('recording');
+      if (!finalTranscript.trim()) { btn.textContent = '🎤 קרא בקול'; return; }
+      const wordResults = compareWords(para.dataset.text || para.textContent, finalTranscript);
+      highlightParaWords(para, wordResults);
+      const correct = wordResults.filter(r => r.correct).length;
+      const total   = wordResults.length;
+      const pct     = Math.round((correct / total) * 100);
+      const scoreEl = document.getElementById('pms-' + idx);
+      if (pct >= 85)      { scoreEl.textContent = `✅ ${correct}/${total} מילים — מצוין!`; btn.textContent = '🔄 קרא שוב'; }
+      else if (pct >= 60) { scoreEl.textContent = `👍 ${correct}/${total} מילים — טוב`;    btn.textContent = '🔄 קרא שוב'; }
+      else                { scoreEl.textContent = `⚠️ ${correct}/${total} מילים — נסה שוב`; btn.textContent = '🎤 נסה שוב'; }
+    }
+
+    launchRec();
+  }
+
+  function compareWords(expectedText, heardText) {
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
+    const expWords  = norm(expectedText).split(/\s+/).filter(Boolean);
+    const heardSet  = new Set(norm(heardText).split(/\s+/).filter(Boolean));
+    return expWords.map(w => ({ word: w, correct: heardSet.has(w) }));
+  }
+
+  function highlightParaWords(para, wordResults) {
+    const map = {};
+    wordResults.forEach(r => { map[r.word] = r.correct; });
+    para.querySelectorAll('.word').forEach(span => {
+      const w = span.dataset.word || '';
+      span.classList.remove('read-correct', 'read-wrong');
+      if (w in map) span.classList.add(map[w] ? 'read-correct' : 'read-wrong');
+    });
+  }
+
   // ── Quiz ─────────────────────────────────────────────────────
   function startQuiz() {
     document.getElementById('quiz-start-area').style.display = 'none';
@@ -906,6 +1259,7 @@
     el.textContent = text;
     document.getElementById('messages').appendChild(el);
     scrollMessages();
+    speakText(text);
     return el;
   }
   function addUserMessage(text) {
