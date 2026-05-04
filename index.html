@@ -208,10 +208,28 @@
       border-top: 1px solid #333;
       padding-top: 6px;
     }
+    .tooltip-btns {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .tooltip .speak-btn {
+      display: none;
+      flex: 0 0 auto;
+      background: #2c2c2c;
+      border: 1px solid #555;
+      color: #ccc;
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .tooltip .speak-btn:hover { background: #3a3a3a; color: #fff; }
+    .tooltip .speak-btn.ready { display: block; }
     .tooltip .save-btn {
       display: none;
-      margin-top: 10px;
-      width: 100%;
+      flex: 1;
       background: #2c2c2c;
       border: 1px solid #555;
       color: #fff;
@@ -662,7 +680,10 @@
   <span class="heb" id="tip-heb"></span>
   <span class="pron" id="tip-pron"></span>
   <span class="eng-small" id="tip-eng"></span>
-  <button class="save-btn" id="save-btn" onclick="toggleSaveWord()"></button>
+  <div class="tooltip-btns">
+    <button class="speak-btn" id="speak-btn" onclick="speakWord()" title="שמע הגייה">🔊</button>
+    <button class="save-btn" id="save-btn" onclick="toggleSaveWord()"></button>
+  </div>
 </div>
 
 <script>
@@ -913,6 +934,7 @@
     document.getElementById('tip-heb').textContent  = '...';
     document.getElementById('tip-pron').textContent = '';
     document.getElementById('tip-eng').textContent  = word;
+    document.getElementById('speak-btn').classList.remove('ready');
     const saveBtn = document.getElementById('save-btn');
     saveBtn.classList.remove('ready');
     tooltip.classList.add('visible');
@@ -947,10 +969,21 @@
     span.classList.remove('loading');
     span.classList.add('translated');
 
-    // Show save button
+    document.getElementById('speak-btn').classList.add('ready');
     const saveBtn = document.getElementById('save-btn');
     saveBtn.classList.add('ready');
     updateSaveBtn(span.dataset.word);
+  }
+
+  function speakWord() {
+    const word = currentWord ? currentWord.dataset.word : null;
+    if (!word) return;
+    synth.cancel();
+    const utt = new SpeechSynthesisUtterance(word);
+    utt.lang  = 'en-US';
+    utt.rate  = 0.75;
+    utt.pitch = 1;
+    synth.speak(utt);
   }
 
   function onWordEnter(e) { clearTimeout(hideTimer); }
@@ -982,6 +1015,8 @@
   let voiceMode   = true;
   let recognition = null;
   let isRecording = false;
+  let accumulatedTranscript  = '';
+  let accumulatedConfidences = [];
 
   // Always show mic btn — check support at click time for better error messages
 
@@ -1008,62 +1043,92 @@
   function startListening() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert('הדפדפן שלך לא תומך במיקרופון.\nנסה Safari או Chrome.'); return; }
-    synth.cancel(); // stop TTS before recording
+    synth.cancel();
 
-    recognition = new SR();
-    recognition.lang            = 'en-US';
-    recognition.interimResults  = false;
-    recognition.maxAlternatives = 1;
-    recognition.continuous      = false;
+    isRecording = true;
+    recognition = null;
+    accumulatedTranscript  = '';
+    accumulatedConfidences = [];
 
-    recognition.onstart = () => {
-      isRecording = true;
-      const btn = document.getElementById('mic-btn');
-      btn.classList.add('recording');
-      btn.textContent = '⏹';
-      btn.title = 'עצור הקלטה';
-      document.getElementById('voice-status').classList.add('active');
-      document.getElementById('chat-input').placeholder = 'מקשיב לך...';
+    const btn = document.getElementById('mic-btn');
+    btn.classList.add('recording');
+    btn.textContent = '⏹';
+    btn.title = 'עצור הקלטה';
+    document.getElementById('voice-status').classList.add('active');
+    document.getElementById('chat-input').placeholder = 'מקשיב לך...';
+
+    launchRecSeg();
+  }
+
+  function launchRecSeg() {
+    if (!isRecording) { deliverAccumulatedTranscript(); return; }
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const rec = new SR();
+    rec.lang           = 'en-US';
+    rec.continuous     = false;
+    rec.interimResults = false;
+    rec.maxAlternatives = 1;
+    recognition = rec;
+
+    rec.onresult = (event) => {
+      const r = event.results[0][0];
+      accumulatedTranscript += r.transcript + ' ';
+      accumulatedConfidences.push(r.confidence);
     };
 
-    recognition.onresult = (event) => {
-      const result     = event.results[0][0];
-      const transcript = result.transcript;
-      const confidence = result.confidence;
-      stopListening();
-      showPronFeedback(confidence);
-      // Voice answers go straight to the bot for English-correction feedback.
-      // Low-confidence transcripts are dropped so the user can retry.
-      if (confidence >= 0.60) {
-        sendVoiceMessage(transcript, confidence);
-      }
+    rec.onend = () => {
+      if (recognition === rec) recognition = null;
+      if (isRecording) setTimeout(launchRecSeg, 150);
+      else deliverAccumulatedTranscript();
     };
 
-    recognition.onerror = (event) => {
-      console.warn('Speech error:', event.error);
-      stopListening();
+    rec.onerror = (event) => {
       if (event.error === 'not-allowed') {
+        isRecording = false;
         alert('נא לאפשר גישה למיקרופון בדפדפן.');
       }
+      // onend fires after onerror and handles restart or finish
     };
 
-    recognition.onend = () => { stopListening(); };
+    try { rec.start(); } catch(e) {
+      recognition = null;
+      isRecording = false;
+      stopListeningUI();
+    }
+  }
 
-    recognition.start();
+  function deliverAccumulatedTranscript() {
+    const transcript  = accumulatedTranscript.trim();
+    const confidences = accumulatedConfidences.slice();
+    accumulatedTranscript  = '';
+    accumulatedConfidences = [];
+    stopListeningUI();
+    if (!transcript) return;
+    const avgConf = confidences.length
+      ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+      : 0.8;
+    showPronFeedback(avgConf);
+    if (avgConf >= 0.60) sendVoiceMessage(transcript, avgConf);
   }
 
   function stopListening() {
     isRecording = false;
     if (recognition) {
       try { recognition.stop(); } catch(e) {}
-      recognition = null;
+      // onend will fire → deliverAccumulatedTranscript
+    } else {
+      deliverAccumulatedTranscript();
     }
+  }
+
+  function stopListeningUI() {
     const btn = document.getElementById('mic-btn');
     btn.classList.remove('recording');
     btn.textContent = '🎤';
     btn.title = 'דבר את התשובה';
     document.getElementById('voice-status').classList.remove('active');
     document.getElementById('chat-input').placeholder = 'Type or speak your answer...';
+    recognition = null;
   }
 
   function showPronFeedback(confidence) {
