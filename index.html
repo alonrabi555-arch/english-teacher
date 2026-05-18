@@ -458,6 +458,19 @@
       transition: background 0.15s;
     }
     .vocab-card .vc-check:hover { background: #1a4fa0; }
+    .vocab-card .vc-speak {
+      background: none;
+      border: 1px solid #c8d8f8;
+      color: #2261c4;
+      border-radius: 6px;
+      padding: 4px 12px;
+      font-size: 0.85rem;
+      font-family: sans-serif;
+      cursor: pointer;
+      margin: 0 0 12px;
+      transition: background 0.15s;
+    }
+    .vocab-card .vc-speak:hover { background: #e0ecff; }
     .vocab-card .vc-result {
       margin-top: 10px;
       font-family: sans-serif;
@@ -556,7 +569,7 @@
       gap: 10px;
       margin-bottom: 8px;
     }
-    .reading-mode .para-mic-row { display: flex; }
+    .reading-mode .para-mic-row { display: flex; flex-wrap: wrap; }
 
     .para-mic-btn {
       background: none;
@@ -577,6 +590,44 @@
 
     .word.read-correct { background: #c8e6c9 !important; color: #1b5e20 !important; }
     .word.read-wrong   { background: #ffcdd2 !important; color: #b71c1c !important; }
+    .word.read-active  { background: #fff5cc !important; color: #5a4500 !important; outline: 1px dashed #d4a800; outline-offset: 1px; }
+
+    .sentence-correction {
+      display: none;
+      flex-basis: 100%;
+      margin: 4px 0 8px;
+      padding: 10px 12px;
+      background: #fffaf0;
+      border: 1px solid #f5d78c;
+      border-radius: 8px;
+      font-family: sans-serif;
+    }
+    .sentence-correction.visible { display: block; }
+    .sentence-correction .sc-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .sentence-correction .sc-prompt { font-size: 0.85rem; color: #5a4500; font-weight: 600; }
+    .sentence-correction .sc-words { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
+    .sentence-correction .sc-word {
+      background: #fff;
+      border: 1px solid #f5c842;
+      color: #5a4500;
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .sentence-correction .sc-word:hover { background: #fff5cc; }
+    .sentence-correction .sc-continue {
+      background: #2261c4;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 5px 14px;
+      font-size: 0.82rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .sentence-correction .sc-continue:hover { background: #1a4fa0; }
 
     @media (max-width: 600px) {
       #article-card { padding: 24px 20px; }
@@ -791,6 +842,7 @@
         <button class="vc-remove" onclick="removeWord('${escHtml(w.english)}')" title="הסר">✕</button>
         <div class="vc-english">${escHtml(w.english)}</div>
         ${w.pronunciation ? `<div class="vc-pron">${escHtml(w.pronunciation)}</div>` : ''}
+        <button class="vc-speak" onclick="speakWord('${escHtml(w.english)}')" title="השמע">🔊 השמע</button>
         <div class="vc-answer-row">
           <input class="vc-input" type="text" dir="rtl"
                  placeholder="כתוב את התרגום לעברית..."
@@ -975,8 +1027,11 @@
     updateSaveBtn(span.dataset.word);
   }
 
-  function speakWord() {
-    const word = currentWord ? currentWord.dataset.word : null;
+  // Direct user action — ignores global voice toggle.
+  // Optional `text` arg lets vocab cards / pronunciation correction speak any string;
+  // with no arg, speaks the current tooltip word.
+  function speakWord(text) {
+    const word = text || (currentWord ? currentWord.dataset.word : null);
     if (!word) return;
     synth.cancel();
     const utt = new SpeechSynthesisUtterance(word);
@@ -1150,7 +1205,7 @@
     }
   }
 
-  // ── Reading mode ──────────────────────────────────────────────
+  // ── Reading mode (sentence-by-sentence with pronunciation correction) ─
   let readingMode = false;
 
   function toggleReadingMode() {
@@ -1162,12 +1217,14 @@
       bodyEl.classList.add('reading-mode');
       btn.classList.add('active');
       btn.textContent = '✕ סגור מצב קריאה';
-      // Insert mic row before each paragraph
       Array.from(bodyEl.querySelectorAll('p')).forEach((p, i) => {
         const row = document.createElement('div');
         row.className = 'para-mic-row';
         row.dataset.pidx = i;
-        row.innerHTML = `<button class="para-mic-btn" id="pmb-${i}">🎤 קרא בקול</button><span class="read-score-inline" id="pms-${i}"></span>`;
+        row.innerHTML =
+          `<button class="para-mic-btn" id="pmb-${i}">🎤 קרא בקול</button>` +
+          `<span class="read-score-inline" id="pms-${i}"></span>` +
+          `<div class="sentence-correction" id="psc-${i}"></div>`;
         row.querySelector('.para-mic-btn').addEventListener('click', () => startParaRead(p, i));
         p.insertAdjacentElement('beforebegin', row);
       });
@@ -1176,17 +1233,47 @@
       btn.classList.remove('active');
       btn.textContent = '🗣 מצב קריאה בקול';
       bodyEl.querySelectorAll('.para-mic-row').forEach(r => r.remove());
-      bodyEl.querySelectorAll('.word').forEach(w => w.classList.remove('read-correct', 'read-wrong'));
+      bodyEl.querySelectorAll('.word').forEach(w => {
+        w.classList.remove('read-correct', 'read-wrong', 'read-active');
+        delete w.dataset.sent;
+      });
     }
+  }
+
+  function splitSentences(text) {
+    const parts = (text || '').match(/[^.!?]+[.!?]+|\S[^.!?]*$/g);
+    return (parts || [text || '']).map(s => s.trim()).filter(Boolean);
+  }
+
+  function indexSentences(para) {
+    const fullText = para.dataset.text || para.textContent;
+    const sentences = splitSentences(fullText);
+    const norm = s => s.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+    const spans = Array.from(para.querySelectorAll('.word'));
+    let cursor = 0;
+    sentences.forEach((sent, sIdx) => {
+      const count = norm(sent).length;
+      for (let i = 0; i < count && cursor < spans.length; i++) {
+        spans[cursor].dataset.sent = String(sIdx);
+        cursor++;
+      }
+    });
+    while (cursor < spans.length) {
+      spans[cursor].dataset.sent = String(Math.max(0, sentences.length - 1));
+      cursor++;
+    }
+    return sentences;
   }
 
   function startParaRead(para, idx) {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { alert('הדפדפן שלך לא תומך במיקרופון.\nנסה Safari.'); return; }
 
-    const btn = document.getElementById('pmb-' + idx);
+    const btn          = document.getElementById('pmb-' + idx);
+    const scoreEl      = document.getElementById('pms-' + idx);
+    const correctionEl = document.getElementById('psc-' + idx);
 
-    // User pressed "סיימתי" — stop and show score
+    // Second click on the active button → abort
     if (btn._active) {
       btn._active = false;
       if (btn._rec) { try { btn._rec.stop(); } catch(e) {} }
@@ -1194,17 +1281,47 @@
     }
 
     synth.cancel();
-    document.getElementById('pms-' + idx).textContent = '';
+    scoreEl.textContent = '';
+    correctionEl.innerHTML = '';
+    correctionEl.classList.remove('visible');
+    para.querySelectorAll('.word').forEach(s => {
+      s.classList.remove('read-correct', 'read-wrong', 'read-active');
+    });
+
+    const sentences = indexSentences(para);
+
     btn._active = true;
     btn._rec    = null;
+    btn._state  = {
+      para, idx, sentences,
+      sentIdx: 0,
+      totalCorrect: 0,
+      totalWords: 0
+    };
     btn.classList.add('recording');
     btn.textContent = '⏹ סיימתי';
 
+    activateSentence(btn._state);
+    launchSentenceRec(btn);
+  }
+
+  function activateSentence(state) {
+    const { para, sentIdx } = state;
+    para.querySelectorAll('.word.read-active').forEach(s => s.classList.remove('read-active'));
+    para.querySelectorAll('.word[data-sent="' + sentIdx + '"]').forEach(s => {
+      if (!s.classList.contains('read-correct') && !s.classList.contains('read-wrong')) {
+        s.classList.add('read-active');
+      }
+    });
+  }
+
+  function launchSentenceRec(btn) {
+    if (!btn._active) return;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     let finalTranscript = '';
 
-    // iOS Safari doesn't support continuous:true — we restart after each phrase
-    function launchRec() {
-      if (!btn._active) { showParaScore(); return; }
+    function loop() {
+      if (!btn._active) return;
       const rec = new SR();
       rec.lang           = 'en-US';
       rec.continuous     = false;
@@ -1219,61 +1336,130 @@
 
       rec.onend = () => {
         btn._rec = null;
-        if (btn._active) {
-          // Auto-restart so user can keep reading
-          setTimeout(launchRec, 150);
+        if (!btn._active) { finishParaRead(btn); return; }
+        if (finalTranscript.trim()) {
+          evaluateAndShow(btn, finalTranscript.trim());
         } else {
-          showParaScore();
+          setTimeout(loop, 150); // iOS Safari restart loop
         }
       };
 
       rec.onerror = (e) => {
         btn._rec = null;
-        if (e.error === 'no-speech' && btn._active) {
-          setTimeout(launchRec, 150); // restart silently on no-speech
+        if (!btn._active) return;
+        if (e.error === 'no-speech') {
+          setTimeout(loop, 150);
         } else if (e.error !== 'aborted') {
-          btn._active = false;
-          btn.classList.remove('recording');
-          btn.textContent = '🎤 קרא בקול';
-          console.warn('Para read error:', e.error);
+          console.warn('Read error:', e.error);
+          abortRead(btn);
         }
       };
 
-      try { rec.start(); } catch(e) { btn._active = false; btn.classList.remove('recording'); btn.textContent = '🎤 קרא בקול'; }
+      try { rec.start(); }
+      catch(e) { abortRead(btn); }
     }
 
-    function showParaScore() {
-      btn.classList.remove('recording');
-      if (!finalTranscript.trim()) { btn.textContent = '🎤 קרא בקול'; return; }
-      const wordResults = compareWords(para.dataset.text || para.textContent, finalTranscript);
-      highlightParaWords(para, wordResults);
-      const correct = wordResults.filter(r => r.correct).length;
-      const total   = wordResults.length;
-      const pct     = Math.round((correct / total) * 100);
-      const scoreEl = document.getElementById('pms-' + idx);
-      if (pct >= 85)      { scoreEl.textContent = `✅ ${correct}/${total} מילים — מצוין!`; btn.textContent = '🔄 קרא שוב'; }
-      else if (pct >= 60) { scoreEl.textContent = `👍 ${correct}/${total} מילים — טוב`;    btn.textContent = '🔄 קרא שוב'; }
-      else                { scoreEl.textContent = `⚠️ ${correct}/${total} מילים — נסה שוב`; btn.textContent = '🎤 נסה שוב'; }
-    }
-
-    launchRec();
+    loop();
   }
 
-  function compareWords(expectedText, heardText) {
-    const norm = s => (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
-    const expWords  = norm(expectedText).split(/\s+/).filter(Boolean);
-    const heardSet  = new Set(norm(heardText).split(/\s+/).filter(Boolean));
-    return expWords.map(w => ({ word: w, correct: heardSet.has(w) }));
-  }
+  function evaluateAndShow(btn, heardText) {
+    const state = btn._state;
+    const sent  = state.sentences[state.sentIdx];
+    const results = evaluateSentence(sent, heardText);
 
-  function highlightParaWords(para, wordResults) {
-    const map = {};
-    wordResults.forEach(r => { map[r.word] = r.correct; });
-    para.querySelectorAll('.word').forEach(span => {
-      const w = span.dataset.word || '';
-      span.classList.remove('read-correct', 'read-wrong');
-      if (w in map) span.classList.add(map[w] ? 'read-correct' : 'read-wrong');
+    const spans = state.para.querySelectorAll('.word[data-sent="' + state.sentIdx + '"]');
+    const wrongs = [];
+    const seenWrong = new Set();
+    results.forEach((r, i) => {
+      const span = spans[i];
+      if (span) {
+        span.classList.remove('read-active');
+        span.classList.add(r.correct ? 'read-correct' : 'read-wrong');
+      }
+      if (!r.correct && !seenWrong.has(r.word)) {
+        wrongs.push(r.word);
+        seenWrong.add(r.word);
+      }
     });
+
+    state.totalCorrect += results.filter(r => r.correct).length;
+    state.totalWords   += results.length;
+
+    if (wrongs.length === 0) {
+      advanceSentence(btn);
+    } else {
+      showCorrection(btn, wrongs);
+    }
+  }
+
+  function showCorrection(btn, wrongs) {
+    const state = btn._state;
+    const correctionEl = document.getElementById('psc-' + state.idx);
+    const wordButtons = wrongs.map(w =>
+      `<button class="sc-word" onclick="speakWord('${escHtml(w)}')">🔊 ${escHtml(w)}</button>`
+    ).join('');
+    correctionEl.innerHTML =
+      '<div class="sc-row">' +
+        '<span class="sc-prompt">תקן הגייה:</span>' +
+        '<span class="sc-words">' + wordButtons + '</span>' +
+        '<button class="sc-continue" id="scc-' + state.idx + '">המשך ▶</button>' +
+      '</div>';
+    correctionEl.classList.add('visible');
+    document.getElementById('scc-' + state.idx).addEventListener('click', () => {
+      correctionEl.innerHTML = '';
+      correctionEl.classList.remove('visible');
+      advanceSentence(btn);
+    });
+    // Auto-speak the first wrong word so the learner hears the correct pronunciation
+    if (wrongs[0]) speakWord(wrongs[0]);
+  }
+
+  function advanceSentence(btn) {
+    if (!btn._active) return;
+    const state = btn._state;
+    state.sentIdx++;
+    if (state.sentIdx >= state.sentences.length) {
+      finishParaRead(btn);
+      return;
+    }
+    activateSentence(state);
+    launchSentenceRec(btn);
+  }
+
+  function abortRead(btn) {
+    btn._active = false;
+    btn.classList.remove('recording');
+    btn.textContent = '🎤 קרא בקול';
+  }
+
+  function finishParaRead(btn) {
+    const state = btn._state || {};
+    btn._active = false;
+    btn.classList.remove('recording');
+    if (btn._rec) { try { btn._rec.stop(); } catch(e) {} btn._rec = null; }
+    const scoreEl      = state.idx != null ? document.getElementById('pms-' + state.idx) : null;
+    const correctionEl = state.idx != null ? document.getElementById('psc-' + state.idx) : null;
+    if (correctionEl) { correctionEl.innerHTML = ''; correctionEl.classList.remove('visible'); }
+    if (state.para) state.para.querySelectorAll('.word').forEach(s => s.classList.remove('read-active'));
+
+    if (!state.totalWords) {
+      btn.textContent = '🎤 קרא בקול';
+      if (scoreEl) scoreEl.textContent = '';
+      return;
+    }
+    btn.textContent = '🔄 קרא שוב';
+    const pct = Math.round((state.totalCorrect / state.totalWords) * 100);
+    if (!scoreEl) return;
+    if (pct >= 85)      scoreEl.textContent = `✅ ${state.totalCorrect}/${state.totalWords} מילים — מצוין!`;
+    else if (pct >= 60) scoreEl.textContent = `👍 ${state.totalCorrect}/${state.totalWords} מילים — טוב`;
+    else                scoreEl.textContent = `⚠️ ${state.totalCorrect}/${state.totalWords} מילים — נסה שוב`;
+  }
+
+  function evaluateSentence(expected, heard) {
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
+    const expWords = norm(expected).split(/\s+/).filter(Boolean);
+    const heardSet = new Set(norm(heard).split(/\s+/).filter(Boolean));
+    return expWords.map(w => ({ word: w, correct: heardSet.has(w) }));
   }
 
   // ── Quiz ─────────────────────────────────────────────────────
