@@ -628,6 +628,8 @@
       white-space: nowrap;
     }
     .sentence-correction .sc-continue:hover { background: #1a4fa0; }
+    .sentence-correction .sc-hint { font-size: 0.78rem; color: #8a7755; font-style: italic; }
+    .sentence-correction .sc-attempt { font-size: 0.78rem; color: #b8860b; font-weight: 600; }
 
     @media (max-width: 600px) {
       #article-card { padding: 24px 20px; }
@@ -1205,7 +1207,7 @@
     }
   }
 
-  // ── Reading mode (sentence-by-sentence with pronunciation correction) ─
+  // ── Reading mode (word-by-word: pause on each mispronunciation, retry until correct) ─
   let readingMode = false;
 
   function toggleReadingMode() {
@@ -1235,34 +1237,12 @@
       bodyEl.querySelectorAll('.para-mic-row').forEach(r => r.remove());
       bodyEl.querySelectorAll('.word').forEach(w => {
         w.classList.remove('read-correct', 'read-wrong', 'read-active');
-        delete w.dataset.sent;
       });
     }
   }
 
-  function splitSentences(text) {
-    const parts = (text || '').match(/[^.!?]+[.!?]+|\S[^.!?]*$/g);
-    return (parts || [text || '']).map(s => s.trim()).filter(Boolean);
-  }
-
-  function indexSentences(para) {
-    const fullText = para.dataset.text || para.textContent;
-    const sentences = splitSentences(fullText);
-    const norm = s => s.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
-    const spans = Array.from(para.querySelectorAll('.word'));
-    let cursor = 0;
-    sentences.forEach((sent, sIdx) => {
-      const count = norm(sent).length;
-      for (let i = 0; i < count && cursor < spans.length; i++) {
-        spans[cursor].dataset.sent = String(sIdx);
-        cursor++;
-      }
-    });
-    while (cursor < spans.length) {
-      spans[cursor].dataset.sent = String(Math.max(0, sentences.length - 1));
-      cursor++;
-    }
-    return sentences;
+  function normReadWord(s) {
+    return (s || '').toLowerCase().replace(/[^a-z']/g, '');
   }
 
   function startParaRead(para, idx) {
@@ -1288,40 +1268,49 @@
       s.classList.remove('read-correct', 'read-wrong', 'read-active');
     });
 
-    const sentences = indexSentences(para);
+    // Build the expected-word sequence from .word spans, skipping ones with no letters
+    const allSpans = Array.from(para.querySelectorAll('.word'));
+    const expectedSpans = [];
+    const expectedWords = [];
+    allSpans.forEach(span => {
+      const w = normReadWord(span.dataset.word || span.textContent);
+      if (w) { expectedSpans.push(span); expectedWords.push(w); }
+    });
+    if (!expectedWords.length) return;
 
     btn._active = true;
     btn._rec    = null;
     btn._state  = {
-      para, idx, sentences,
-      sentIdx: 0,
+      para, idx, expectedWords, expectedSpans,
+      expectedIdx: 0,
+      retryMode: false,
+      retryCount: 0,
       totalCorrect: 0,
-      totalWords: 0
+      totalWords: expectedWords.length
     };
     btn.classList.add('recording');
     btn.textContent = '⏹ סיימתי';
 
-    activateSentence(btn._state);
-    launchSentenceRec(btn);
+    highlightActiveWord(btn._state);
+    launchRecLoop(btn);
   }
 
-  function activateSentence(state) {
-    const { para, sentIdx } = state;
-    para.querySelectorAll('.word.read-active').forEach(s => s.classList.remove('read-active'));
-    para.querySelectorAll('.word[data-sent="' + sentIdx + '"]').forEach(s => {
-      if (!s.classList.contains('read-correct') && !s.classList.contains('read-wrong')) {
-        s.classList.add('read-active');
-      }
-    });
+  function highlightActiveWord(state) {
+    const { expectedSpans, expectedIdx } = state;
+    expectedSpans.forEach(s => s.classList.remove('read-active'));
+    const cur = expectedSpans[expectedIdx];
+    if (cur && !cur.classList.contains('read-correct') && !cur.classList.contains('read-wrong')) {
+      cur.classList.add('read-active');
+    }
   }
 
-  function launchSentenceRec(btn) {
+  function launchRecLoop(btn) {
     if (!btn._active) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    let finalTranscript = '';
 
     function loop() {
       if (!btn._active) return;
+      let phrase = '';
       const rec = new SR();
       rec.lang           = 'en-US';
       rec.continuous     = false;
@@ -1330,15 +1319,16 @@
 
       rec.onresult = (event) => {
         if (event.results[0] && event.results[0].isFinal) {
-          finalTranscript += event.results[0][0].transcript + ' ';
+          phrase += event.results[0][0].transcript + ' ';
         }
       };
 
       rec.onend = () => {
         btn._rec = null;
         if (!btn._active) { finishParaRead(btn); return; }
-        if (finalTranscript.trim()) {
-          evaluateAndShow(btn, finalTranscript.trim());
+        if (phrase.trim()) {
+          processHeard(btn, phrase.trim());
+          if (btn._active) setTimeout(loop, 150);
         } else {
           setTimeout(loop, 150); // iOS Safari restart loop
         }
@@ -1362,68 +1352,95 @@
     loop();
   }
 
-  function evaluateAndShow(btn, heardText) {
+  function processHeard(btn, heardText) {
     const state = btn._state;
-    const sent  = state.sentences[state.sentIdx];
-    const results = evaluateSentence(sent, heardText);
+    const tokens = heardText
+      .toLowerCase()
+      .replace(/[^a-z\s']/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
 
-    const spans = state.para.querySelectorAll('.word[data-sent="' + state.sentIdx + '"]');
-    const wrongs = [];
-    const seenWrong = new Set();
-    results.forEach((r, i) => {
-      const span = spans[i];
-      if (span) {
-        span.classList.remove('read-active');
-        span.classList.add(r.correct ? 'read-correct' : 'read-wrong');
+    if (state.retryMode) {
+      // In retry mode, only the FIRST token counts — it's the user's retry attempt
+      if (tokens.length === 0) return;
+      const expected = state.expectedWords[state.expectedIdx];
+      const heard    = tokens[0];
+      if (heard === expected) {
+        // Retry succeeded — mark green, advance, exit retry mode
+        const span = state.expectedSpans[state.expectedIdx];
+        if (span) { span.classList.remove('read-wrong'); span.classList.add('read-correct'); }
+        state.totalCorrect++;
+        state.expectedIdx++;
+        state.retryMode = false;
+        state.retryCount = 0;
+        hideCorrection(state);
+        if (state.expectedIdx >= state.expectedWords.length) {
+          finishParaRead(btn);
+          return;
+        }
+        highlightActiveWord(state);
+        // If the user kept reading after correcting, process the remaining tokens
+        const rest = tokens.slice(1);
+        if (rest.length > 0) walkNormalTokens(btn, rest);
+      } else {
+        // Retry failed — keep asking
+        state.retryCount++;
+        showCorrection(state, expected, state.retryCount);
+        speakWord(expected);
       }
-      if (!r.correct && !seenWrong.has(r.word)) {
-        wrongs.push(r.word);
-        seenWrong.add(r.word);
-      }
-    });
-
-    state.totalCorrect += results.filter(r => r.correct).length;
-    state.totalWords   += results.length;
-
-    if (wrongs.length === 0) {
-      advanceSentence(btn);
-    } else {
-      showCorrection(btn, wrongs);
-    }
-  }
-
-  function showCorrection(btn, wrongs) {
-    const state = btn._state;
-    const correctionEl = document.getElementById('psc-' + state.idx);
-    const wordButtons = wrongs.map(w =>
-      `<button class="sc-word" onclick="speakWord('${escHtml(w)}')">🔊 ${escHtml(w)}</button>`
-    ).join('');
-    correctionEl.innerHTML =
-      '<div class="sc-row">' +
-        '<span class="sc-prompt">תקן הגייה:</span>' +
-        '<span class="sc-words">' + wordButtons + '</span>' +
-        '<button class="sc-continue" id="scc-' + state.idx + '">המשך ▶</button>' +
-      '</div>';
-    correctionEl.classList.add('visible');
-    document.getElementById('scc-' + state.idx).addEventListener('click', () => {
-      correctionEl.innerHTML = '';
-      correctionEl.classList.remove('visible');
-      advanceSentence(btn);
-    });
-    // Auto-speak the first wrong word so the learner hears the correct pronunciation
-    if (wrongs[0]) speakWord(wrongs[0]);
-  }
-
-  function advanceSentence(btn) {
-    if (!btn._active) return;
-    const state = btn._state;
-    state.sentIdx++;
-    if (state.sentIdx >= state.sentences.length) {
-      finishParaRead(btn);
       return;
     }
-    activateSentence(state);
-    launchSentenceRec(btn);
+
+    walkNormalTokens(btn, tokens);
+  }
+
+  function walkNormalTokens(btn, tokens) {
+    const state = btn._state;
+    for (let i = 0; i < tokens.length; i++) {
+      if (state.expectedIdx >= state.expectedWords.length) { finishParaRead(btn); return; }
+      const expected = state.expectedWords[state.expectedIdx];
+      const heard    = tokens[i];
+      if (heard === expected) {
+        const span = state.expectedSpans[state.expectedIdx];
+        if (span) { span.classList.remove('read-active'); span.classList.add('read-correct'); }
+        state.totalCorrect++;
+        state.expectedIdx++;
+        if (state.expectedIdx >= state.expectedWords.length) { finishParaRead(btn); return; }
+        highlightActiveWord(state);
+      } else {
+        // Mismatch — stop, enter retry mode for this word
+        const span = state.expectedSpans[state.expectedIdx];
+        if (span) { span.classList.remove('read-active'); span.classList.add('read-wrong'); }
+        state.retryMode = true;
+        state.retryCount = 1;
+        showCorrection(state, expected, 1);
+        speakWord(expected);
+        return; // discard remaining tokens in this phrase
+      }
+    }
+  }
+
+  function showCorrection(state, word, attempt) {
+    const correctionEl = document.getElementById('psc-' + state.idx);
+    const attemptHtml = attempt > 1
+      ? `<span class="sc-attempt">ניסיון ${attempt}</span>`
+      : '';
+    correctionEl.innerHTML =
+      '<div class="sc-row">' +
+        '<span class="sc-prompt">חזור על המילה:</span>' +
+        `<button class="sc-word" onclick="speakWord('${escHtml(word)}')">🔊 ${escHtml(word)}</button>` +
+        '<span class="sc-hint">דבר שוב את המילה</span>' +
+        attemptHtml +
+      '</div>';
+    correctionEl.classList.add('visible');
+  }
+
+  function hideCorrection(state) {
+    const correctionEl = document.getElementById('psc-' + state.idx);
+    if (correctionEl) {
+      correctionEl.innerHTML = '';
+      correctionEl.classList.remove('visible');
+    }
   }
 
   function abortRead(btn) {
@@ -1448,18 +1465,12 @@
       return;
     }
     btn.textContent = '🔄 קרא שוב';
-    const pct = Math.round((state.totalCorrect / state.totalWords) * 100);
     if (!scoreEl) return;
-    if (pct >= 85)      scoreEl.textContent = `✅ ${state.totalCorrect}/${state.totalWords} מילים — מצוין!`;
-    else if (pct >= 60) scoreEl.textContent = `👍 ${state.totalCorrect}/${state.totalWords} מילים — טוב`;
-    else                scoreEl.textContent = `⚠️ ${state.totalCorrect}/${state.totalWords} מילים — נסה שוב`;
-  }
-
-  function evaluateSentence(expected, heard) {
-    const norm = s => (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim();
-    const expWords = norm(expected).split(/\s+/).filter(Boolean);
-    const heardSet = new Set(norm(heard).split(/\s+/).filter(Boolean));
-    return expWords.map(w => ({ word: w, correct: heardSet.has(w) }));
+    if (state.expectedIdx >= state.expectedWords.length) {
+      scoreEl.textContent = `✅ סיימת את הפסקה — ${state.totalCorrect}/${state.totalWords}`;
+    } else {
+      scoreEl.textContent = `⏸ נעצרת אחרי ${state.totalCorrect}/${state.totalWords} מילים`;
+    }
   }
 
   // ── Quiz ─────────────────────────────────────────────────────
